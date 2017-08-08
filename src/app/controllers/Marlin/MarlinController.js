@@ -679,11 +679,6 @@ class MarlinController {
                 this.event.trigger('gcode:stop');
 
                 this.workflow.stop();
-
-                const delay = 500; // 500ms
-                setTimeout(() => {
-                    this.writeln(socket, 'M112');
-                }, delay);
             },
             'pause': () => {
                 log.warn(`Warning: The "${cmd}" command is deprecated and will be removed in a future release.`);
@@ -783,9 +778,8 @@ class MarlinController {
                 // Unsupported
             },
             'lasertest:on': () => {
-                const [power = 0, duration = 0, maxS = 1000] = args;
+                const [power = 0, duration = 0, maxS = 255] = args;
                 const commands = [
-                    'G1F1',
                     'M3S' + ensurePositiveNumber(maxS * (power / 100))
                 ];
                 if (duration > 0) {
