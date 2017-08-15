@@ -177,7 +177,7 @@ class AxesWidget extends Component {
 
             // FIXME
             if (controllerType === MARLIN) {
-                return _.get(controllerState, 'parserstate.modal.coordinate') || defaultWCS;
+                return get(controllerState, 'parserstate.modal.coordinate') || defaultWCS;
             }
 
             if (controllerType === SMOOTHIE) {
