@@ -21,6 +21,7 @@ import Grbl from './Grbl';
 import {
     GRBL,
     GRBL_ACTIVE_STATE_RUN,
+    GRBL_ACTIVE_STATE_HOLD,
     GRBL_REALTIME_COMMANDS,
     GRBL_ALARMS,
     GRBL_ERRORS,
@@ -214,7 +215,7 @@ class GrblController {
 
         // Sender
         this.sender = new Sender(SP_TYPE_CHAR_COUNTING, {
-            // Deduct the length of periodic commands ('$G\n', '?') to prevent from buffer overrun
+            // Deduct the buffer size to prevent from buffer overrun
             bufferSize: (128 - 8), // The default buffer size is 128 bytes
             dataFilter: (line, context) => {
                 if (line === WAIT) {
@@ -284,22 +285,36 @@ class GrblController {
         this.controller.on('status', (res) => {
             this.actionMask.queryStatusReport = false;
 
-            // Do not change buffer size during gcode sending (#133)
-            if (this.workflow.state === WORKFLOW_STATE_IDLE && this.sender.sp.dataLength === 0) {
-                // Check if Grbl reported the rx buffer (#115)
-                if (res && res.buf && res.buf.rx) {
-                    const rx = Number(res.buf.rx) || 0;
-                    // Deduct the length of periodic commands ('$G\n', '?') to prevent from buffer overrun
-                    const bufferSize = (rx - 8);
-                    if (bufferSize > this.sender.sp.bufferSize) {
-                        this.sender.sp.bufferSize = bufferSize;
-                    }
-                }
-            }
-
             if (this.actionMask.replyStatusReport) {
                 this.actionMask.replyStatusReport = false;
                 this.emitAll('serialport:read', res.raw);
+            }
+
+            // Check if the receive buffer is available in the status report
+            // @see https://github.com/cncjs/cncjs/issues/115
+            // @see https://github.com/cncjs/cncjs/issues/133
+            const rx = Number(_.get(res, 'buf.rx', 0)) || 0;
+            if (rx > 0) {
+                // Do not modify the buffer size when running a G-code program
+                if (this.workflow.state !== WORKFLOW_STATE_IDLE) {
+                    return;
+                }
+
+                // Check if the streaming protocol is character-counting streaming protocol
+                if (this.sender.sp.type !== SP_TYPE_CHAR_COUNTING) {
+                    return;
+                }
+
+                // Check if the queue is empty
+                if (this.sender.sp.dataLength !== 0) {
+                    return;
+                }
+
+                // Deduct the receive buffer length to prevent from buffer overrun
+                const bufferSize = (rx - 8); // TODO
+                if (bufferSize > this.sender.sp.bufferSize) {
+                    this.sender.sp.bufferSize = bufferSize;
+                }
             }
         });
 
@@ -438,8 +453,9 @@ class GrblController {
 
         const queryStatusReport = () => {
             const now = new Date().getTime();
-            const lastQueryTime = this.actionTime.queryStatusReport;
 
+            // The status report query (?) is a realtime command, it does not consume the receive buffer.
+            const lastQueryTime = this.actionTime.queryStatusReport;
             if (lastQueryTime > 0) {
                 const timespan = Math.abs(now - lastQueryTime);
                 const toleranceTime = 5000; // 5 seconds
@@ -464,17 +480,23 @@ class GrblController {
 
         const queryParserState = _.throttle(() => {
             const now = new Date().getTime();
-            const lastQueryTime = this.actionTime.queryParserState;
 
-            if (lastQueryTime > 0) {
-                const timespan = Math.abs(now - lastQueryTime);
-                const toleranceTime = 10000; // 10 seconds
+            // Do not force query parser state ($G) when running a G-code program,
+            // it will consume 3 bytes from the receive buffer in each time period.
+            // @see https://github.com/cncjs/cncjs/issues/176
+            // @see https://github.com/cncjs/cncjs/issues/186
+            if ((this.workflow.state === WORKFLOW_STATE_IDLE) && this.controller.isIdle()) {
+                const lastQueryTime = this.actionTime.queryParserState;
+                if (lastQueryTime > 0) {
+                    const timespan = Math.abs(now - lastQueryTime);
+                    const toleranceTime = 10000; // 10 seconds
 
-                // Check if it has not been updated for a long time
-                if (timespan >= toleranceTime) {
-                    log.debug(`Continue parser state query: timespan=${timespan}ms`);
-                    this.actionMask.queryParserState.state = false;
-                    this.actionMask.queryParserState.reply = false;
+                    // Check if it has not been updated for a long time
+                    if (timespan >= toleranceTime) {
+                        log.debug(`Continue parser state query: timespan=${timespan}ms`);
+                        this.actionMask.queryParserState.state = false;
+                        this.actionMask.queryParserState.reply = false;
+                    }
                 }
             }
 
@@ -801,20 +823,27 @@ class GrblController {
                 log.warn(`Warning: The "${cmd}" command is deprecated and will be removed in a future release.`);
                 this.command(socket, 'gcode:stop');
             },
+            // @param {object} options The options object.
+            // @param {boolean} [options.force] Whether to force stop a G-code program. Defaults to false.
             'gcode:stop': () => {
+                const { force = false } = { ...args[0] };
+
                 this.event.trigger('gcode:stop');
 
                 this.workflow.stop();
 
-                const activeState = _.get(this.state, 'status.activeState', '');
-                const delay = 500; // 500ms
-                if (activeState === GRBL_ACTIVE_STATE_RUN) {
-                    this.write(socket, '!'); // hold
+                if (force) {
+                    const activeState = _.get(this.state, 'status.activeState', '');
+                    if (activeState === GRBL_ACTIVE_STATE_RUN) {
+                        this.write(socket, '!'); // hold
+                    }
+                    setTimeout(() => {
+                        const activeState = _.get(this.state, 'status.activeState', '');
+                        if (activeState === GRBL_ACTIVE_STATE_HOLD) {
+                            this.write(socket, '\x18'); // ctrl-x
+                        }
+                    }, 500); // delay 500ms
                 }
-
-                setTimeout(() => {
-                    this.write(socket, '\x18'); // ctrl-x
-                }, delay);
             },
             'pause': () => {
                 log.warn(`Warning: The "${cmd}" command is deprecated and will be removed in a future release.`);
@@ -876,6 +905,13 @@ class GrblController {
 
                 this.write(socket, '\x18'); // ^x
             },
+            // Feed Overrides
+            // @param {number} value The amount of percentage increase or decrease.
+            //   0: Set 100% of programmed rate.
+            //  10: Increase 10%
+            // -10: Decrease 10%
+            //   1: Increase 1%
+            //  -1: Decrease 1%
             'feedOverride': () => {
                 const [value] = args;
 
@@ -891,6 +927,13 @@ class GrblController {
                     this.write(socket, '\x94');
                 }
             },
+            // Spindle Speed Overrides
+            // @param {number} value The amount of percentage increase or decrease.
+            //   0: Set 100% of programmed spindle speed
+            //  10: Increase 10%
+            // -10: Decrease 10%
+            //   1: Increase 1%
+            //  -1: Decrease 1%
             'spindleOverride': () => {
                 const [value] = args;
 
@@ -906,6 +949,11 @@ class GrblController {
                     this.write(socket, '\x9d');
                 }
             },
+            // Rapid Overrides
+            // @param {number} value A percentage value of 25, 50, or 100. A value of zero will reset to 100%.
+            // 100: Set to 100% full rapid rate.
+            //  50: Set to 50% of rapid rate.
+            //  25: Set to 25% of rapid rate.
             'rapidOverride': () => {
                 const [value] = args;
 
