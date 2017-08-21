@@ -4,8 +4,7 @@ import get from 'lodash/get';
 import mapValues from 'lodash/mapValues';
 import pubsub from 'pubsub-js';
 import PropTypes from 'prop-types';
-import React, { Component } from 'react';
-import shallowCompare from 'react-addons-shallow-compare';
+import React, { PureComponent } from 'react';
 import Detector from 'three/examples/js/Detector';
 import api from '../../api';
 import Anchor from '../../components/Anchor';
@@ -74,7 +73,7 @@ const displayWebGLErrorMessage = () => {
     });
 };
 
-class VisualizerWidget extends Component {
+class VisualizerWidget extends PureComponent {
     static propTypes = {
         widgetId: PropTypes.string.isRequired
     };
@@ -358,6 +357,17 @@ class VisualizerWidget extends Component {
                 }
             });
         },
+        toggleGridLineNumbersVisibility: () => {
+            this.setState({
+                objects: {
+                    ...this.state.objects,
+                    gridLineNumbers: {
+                        ...this.state.objects.gridLineNumbers,
+                        visible: !this.state.objects.gridLineNumbers.visible
+                    }
+                }
+            });
+        },
         toggleToolheadVisibility: () => {
             this.setState({
                 objects: {
@@ -553,9 +563,6 @@ class VisualizerWidget extends Component {
         this.unsubscribe();
         this.removeControllerEvents();
     }
-    shouldComponentUpdate(nextProps, nextState) {
-        return shallowCompare(this, nextProps, nextState);
-    }
     componentDidUpdate(prevProps, prevState) {
         if (this.state.disabled !== prevState.disabled) {
             this.config.set('disabled', this.state.disabled);
@@ -571,6 +578,9 @@ class VisualizerWidget extends Component {
         }
         if (this.state.objects.coordinateSystem.visible !== prevState.objects.coordinateSystem.visible) {
             this.config.set('objects.coordinateSystem.visible', this.state.objects.coordinateSystem.visible);
+        }
+        if (this.state.objects.gridLineNumbers.visible !== prevState.objects.gridLineNumbers.visible) {
+            this.config.set('objects.gridLineNumbers.visible', this.state.objects.gridLineNumbers.visible);
         }
         if (this.state.objects.toolhead.visible !== prevState.objects.toolhead.visible) {
             this.config.set('objects.toolhead.visible', this.state.objects.toolhead.visible);
@@ -624,6 +634,9 @@ class VisualizerWidget extends Component {
             objects: {
                 coordinateSystem: {
                     visible: this.config.get('objects.coordinateSystem.visible', true)
+                },
+                gridLineNumbers: {
+                    visible: this.config.get('objects.gridLineNumbers.visible', true)
                 },
                 toolhead: {
                     visible: this.config.get('objects.toolhead.visible', true)
