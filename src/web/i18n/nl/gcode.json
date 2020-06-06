@@ -1,8 +1,8 @@
 {
     "Rapid Move (G0)": "Snelle Beweging (G0)",
-    "Linear Move (G1)": "Lineair Beweging (G1)",
-    "CW Arc (G2)": "Rechtsom Bewging Boog (G2)",
-    "CCW Arc (G3)": "Linksom Beging Boog (G3)",
+    "Linear Move (G1)": "Lineaire Beweging (G1)",
+    "CW Arc (G2)": "Rechtsom Beweging Boog (G2)",
+    "CCW Arc (G3)": "Linksom Beweging Boog (G3)",
     "Probing (G38.2)": "Peiling (G38.2)",
     "Probing (G38.3)": "Peiling (G38.3)",
     "Probing (G38.4)": "Peiling (G38.4)",
